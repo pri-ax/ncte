@@ -1,0 +1,134 @@
+---
+title: "Untitled"
+author: "Pri Oberoi"
+date: "11/7/2016"
+output: html_document
+---
+
+```{r}
+library(reshape2)
+
+###################
+# user defined paths
+###################
+spokespeople_path <- "/Users/prioberoi/Dropbox/pro bono projects/ncte/Spokespeople Tracking - Spokespeople.csv"
+usts_path <- "/Users/prioberoi/Dropbox/pro bono projects/ncte/usts.csv"
+
+###################
+# import usts table from Access database
+###################
+usts <- read.csv(usts_path, header = TRUE, stringsAsFactors = FALSE, na.strings = c("", " ", "NA", "NULL"), sep = ",")
+
+###################
+# import spokespeople
+###################
+d <- read.csv(spokespeople_path, header = TRUE, stringsAsFactors = FALSE, na.strings = c("", " "))
+# update counts of media links per person so NA == 0
+d$EARNED.MEDIA.COUNTS[is.na(d$EARNED.MEDIA.COUNTS)] <- 0
+
+###################
+# de-normalize spokespeople data, create People table
+###################
+people <- d[d$EARNED.MEDIA.COUNTS %in% c(0,1),]
+for(i in 2:max(d$EARNED.MEDIA.COUNTS)){
+  temp <- d[d$EARNED.MEDIA.COUNTS == i,]
+  if(nrow(temp) > 0){
+    temp <- temp[rep(1:nrow(temp), i),]
+  }
+  people <- rbind(people, temp)
+}
+
+###################
+# create Media table
+###################
+# index col where media-related columns start
+startat <- grep("EARNED.MEDIA.LINK", names(people))
+# create a table of all media liks
+media <- as.vector(unlist(people[,startat:ncol(people)]))
+media <- media[!is.na(media)]
+media <- as.data.frame(unique(media))
+# create unique identifier for media links
+media$id <- 1:nrow(media)
+names(media) <- c("link", "ID")
+
+###################
+# normalize people table
+###################
+# normalize
+people <- unique(people)
+# create unique ID for people table
+ID <- 1:nrow(people)
+people <- cbind(ID, people)
+
+###################
+# create join table for People-Media
+###################
+# used people table to pull the people ID and media links
+join <- people[,c(1, startat:ncol(people))]
+join <- melt(join, na.rm = TRUE, id.vars = c(1), measure.vars = c(2:ncol(join)))
+join <- join[!(join$variable %in% "EARNED.MEDIA.COUNTS"),]
+join <- join[,c('ID', 'value')]
+for(eachLink in unique(join$value)){
+  join$value[join$value %in% eachLink] <- media$ID[grep(eachLink, media$link)]
+}
+names(join) <- c('people_ID', 'media_ID')
+
+# remove media link columns from people
+people <- people[,c(1:(startat-1))]
+
+###################
+# find matches between people and usts tables
+###################
+
+# copy ID from usts to people table, where match is found
+people$usts_id <- NA
+
+# based on email
+matches <- unlist(strsplit(people$EMAIL[!is.na(people$EMAIL)], ";"))[unlist(strsplit(people$EMAIL[!is.na(people$EMAIL)], ";")) %in% usts$Email]
+for(email in matches){
+  new_id <- usts$ID[usts$Email %in% email]
+  people$usts_id[grep(email, people$EMAIL, value = FALSE)] <- new_id
+}
+
+# based on first name, last name and zip
+# create temporary unique identifier
+people$identifier <- gsub(" ", "", paste0(people$FIRST.NAME, people$LAST.NAME, people$ZIP))
+people$identifier[is.na(people$FIRST.NAME) | is.na(people$LAST.NAME) | is.na(people$ZIP)] <- NA
+usts$ZIP <- gsub(".00", "", usts$ZIP)
+usts$ZIP <- gsub(",", "", usts$ZIP)
+usts$ZIP <- as.numeric(usts$ZIP)
+usts$identifier <- gsub(" ", "", paste0(usts$First.Name, usts$Last.Name, usts$ZIP))
+usts$identifier[is.na(usts$First.Name) | is.na(usts$Last.Name) | is.na(usts$ZIP)] <- NA
+# update usts_id
+for(identifier in unique(usts$identifier[!is.na(usts$identifier)])){
+  people$usts_id[people$identifier %in% identifier] <- usts$ID[usts$identifier %in% identifier][1]
+}
+people$identifier <- NULL
+usts$identifier <- NULL
+
+# based on first name, last name and phone #
+# clean up phone number
+usts$Phone <- sapply(usts$Phone, function(x) paste(strsplit(x[1], "")[[1]][gregexpr("[0-9]", x[1])[[1]]], collapse = ''))
+usts$Phone[usts$Phone %in% "NA"] <- NA
+people$PHONE <- sapply(people$PHONE, function(x) paste(strsplit(x[1], "")[[1]][gregexpr("[0-9]", x[1])[[1]]], collapse = ''))
+people$PHONE[people$PHONE %in% "NA"] <- NA
+# create temporary unique identifier
+people$identifier <- gsub(" ", "", paste0(people$FIRST.NAME, people$LAST.NAME, people$PHONE))
+people$identifier[is.na(people$FIRST.NAME) | is.na(people$LAST.NAME) | is.na(people$PHONE)] <- NA
+usts$identifier <- gsub(" ", "", paste0(usts$First.Name, usts$Last.Name, usts$Phone))
+usts$identifier[is.na(usts$First.Name) | is.na(usts$Last.Name) | is.na(usts$Phone)] <- NA
+# update usts_id
+for(identifier in unique(usts$identifier[!is.na(usts$identifier)])){
+  people$usts_id[people$identifier %in% identifier] <- usts$ID[usts$identifier %in% identifier][1]
+}
+people$identifier <- NULL
+usts$identifier <- NULL
+
+###################
+# write tables 
+###################
+write.csv(people, file = "/Users/prioberoi/Dropbox/pro bono projects/ncte/people.csv", row.names = FALSE)
+write.csv(media, file = "/Users/prioberoi/Dropbox/pro bono projects/ncte/media.csv", row.names = FALSE)
+write.csv(join, file = "/Users/prioberoi/Dropbox/pro bono projects/ncte/join-people-media.csv", row.names = FALSE)
+```
+
